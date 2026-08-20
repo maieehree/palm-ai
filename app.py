@@ -110,30 +110,37 @@ def extract_thinking(text: str) -> tuple:
         reasoning_parts.append(think_match.group(1).strip())
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
 
-    # ── Step 2: Line-by-line — บรรทัดที่ไม่มีภาษาไทยเลย → reasoning ──
+    # ── Step 2: Line-by-line — บรรทัดที่ "ขึ้นต้นด้วยไทย" → answer, อื่น → reasoning ──
     THAI_RE = re.compile(r'[\u0e00-\u0e7f]')
+    BULLET_PREFIX = re.compile(r'^[\s\-\*\•\d\.\)\(：:]+')
+
+    def is_thai_lead(line: str) -> bool:
+        """ตรวจว่าบรรทัดขึ้นต้นด้วยอักษรไทย (หลังตัด bullet/เลข prefix)"""
+        cleaned = BULLET_PREFIX.sub('', line.strip()).strip()
+        if not cleaned:
+            return False
+        return '\u0e00' <= cleaned[0] <= '\u0e7f'
+
     answer_lines = []
     english_lines = []
 
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
-            # บรรทัดว่าง — ใส่ใน answer ถ้า answer มีเนื้อหาแล้ว
             if answer_lines:
                 answer_lines.append('')
             elif english_lines:
                 english_lines.append('')
             continue
 
-        if THAI_RE.search(stripped):
-            # มีอักษรไทย → บรรทัดนี้เป็น answer
+        if is_thai_lead(stripped):
+            # ขึ้นต้นด้วยไทย → answer
             if english_lines:
-                # flush English ที่ค้างอยู่ไป reasoning
                 reasoning_parts.append('\n'.join(english_lines).strip())
                 english_lines = []
             answer_lines.append(line)
         else:
-            # ไม่มีอักษรไทยเลย → เป็น English/reasoning
+            # ขึ้นต้นด้วย English หรือสัญลักษณ์ → reasoning
             english_lines.append(line)
 
     # flush English ที่เหลือ
