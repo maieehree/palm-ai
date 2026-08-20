@@ -91,42 +91,65 @@ import re
 def extract_thinking(text: str) -> tuple:
     """
     แยก Thinking/Reasoning ของ Qwen3 ออกจาก final answer
-    - ดึง <think>...</think> block ออกมาเก็บเป็น reasoning แยก
-    - ลบ/ย้าย English analysis block ที่รั่วออกมานอก tag
-    - Return: (answer, reasoning) tuple
+
+    วิธีการ:
+    1. ดึง <think>...</think> block → reasoning
+    2. แยก line-by-line: บรรทัดที่ไม่มีอักษรไทย → reasoning, บรรทัดที่มีไทย → answer
+       (วิธีนี้ robust กว่า pattern matching เพราะไม่ขึ้นกับ pattern ที่โมเดลใช้)
+
+    Return: (answer, reasoning) tuple
     """
     if not text:
         return text, ""
 
-    reasoning = ""
+    reasoning_parts = []
 
-    # 1. ดึง <think>...</think> block ออกมาเก็บไว้เป็น reasoning
+    # ── Step 1: ดึง <think>...</think> block ──
     think_match = re.search(r'<think>(.*?)</think>', text, flags=re.DOTALL)
     if think_match:
-        reasoning = think_match.group(1).strip()
+        reasoning_parts.append(think_match.group(1).strip())
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
 
-    # 2. ลบ/ย้าย English analysis blocks ที่รั่วออกมานอก <think> tag
-    think_markers = [
-        r"Here'?s a thinking process.*?(?=\n\n[^\n]|\n(?:\d+\.|\*|-|\u0e08\u0e32\u0e01|\u0e2a\u0e27\u0e31\u0e2a|\u0e1c\u0e21|\u0e19\u0e49\u0e2d\u0e07))",
-        r"Thinking process:.*?(?=\n\n[^\n])",
-        r"Let me (?:analyze|think|break|go through|process).*?(?=\n\n[^\n])",
-        r"\d+\.\s*Analyze\s+User\s+Input:.*?(?=\n[\u0e00-\u0e7f]|\Z)",
-        r"Step\s+\d+:.*?(?=\n\n[^\n]|\Z)",
-    ]
-    for pattern in think_markers:
-        text = re.sub(pattern, '', text, flags=re.DOTALL | re.IGNORECASE)
+    # ── Step 2: Line-by-line — บรรทัดที่ไม่มีภาษาไทยเลย → reasoning ──
+    THAI_RE = re.compile(r'[\u0e00-\u0e7f]')
+    answer_lines = []
+    english_lines = []
 
-    # 3. ถ้ายังมี English preamble ใหญ่ก่อนภาษาไทย → ย้ายไปเป็น reasoning
-    thai_match = re.search(r'[\u0e00-\u0e7f]', text)
-    if thai_match and thai_match.start() > 150:
-        english_preamble = text[:thai_match.start()].strip()
-        if english_preamble and re.search(r'[A-Za-z]{4,}', english_preamble):
-            if not reasoning:
-                reasoning = english_preamble
-            text = text[thai_match.start():]
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            # บรรทัดว่าง — ใส่ใน answer ถ้า answer มีเนื้อหาแล้ว
+            if answer_lines:
+                answer_lines.append('')
+            elif english_lines:
+                english_lines.append('')
+            continue
 
-    return text.strip(), reasoning
+        if THAI_RE.search(stripped):
+            # มีอักษรไทย → บรรทัดนี้เป็น answer
+            if english_lines:
+                # flush English ที่ค้างอยู่ไป reasoning
+                reasoning_parts.append('\n'.join(english_lines).strip())
+                english_lines = []
+            answer_lines.append(line)
+        else:
+            # ไม่มีอักษรไทยเลย → เป็น English/reasoning
+            english_lines.append(line)
+
+    # flush English ที่เหลือ
+    if english_lines:
+        reasoning_parts.append('\n'.join(english_lines).strip())
+
+    answer = '\n'.join(answer_lines).strip()
+    reasoning = '\n\n'.join(r for r in reasoning_parts if r).strip()
+
+    # ── Fallback: ถ้า answer ว่างเปล่า ให้ใช้ text เดิมทั้งหมด ──
+    if not answer:
+        answer = text.strip()
+
+    return answer, reasoning
+
+
 
 
 RIPENESS_COLOR = {
