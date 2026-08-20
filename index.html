@@ -176,6 +176,53 @@
   /* ── API error state ── */
   .api-error{background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.25);border-radius:12px;padding:10px 14px;font-size:12.5px;color:#c0392b;margin-top:8px;display:none;}
   .api-error.show{display:block;}
+
+  /* ── Reasoning collapsible ── */
+  .reasoning-section{margin-top:10px;}
+  .reasoning-toggle{
+    display:inline-flex;align-items:center;gap:6px;
+    background:none;border:1.5px solid rgba(63,107,58,0.30);
+    color:var(--leaf-deep);font-family:'Kanit',sans-serif;font-size:12px;
+    padding:5px 12px;border-radius:20px;cursor:pointer;
+    transition:background .15s ease,border-color .15s ease,color .15s ease;
+  }
+  .reasoning-toggle:hover{background:rgba(63,107,58,0.08);border-color:var(--leaf);}
+  .reasoning-toggle .arrow{transition:transform .25s ease;display:inline-block;}
+  .reasoning-toggle.open .arrow{transform:rotate(180deg);}
+  .reasoning-box{
+    display:none;margin-top:8px;
+    background:rgba(63,107,58,0.06);border:1px solid rgba(63,107,58,0.18);
+    border-radius:10px;padding:10px 14px;
+    font-size:12px;line-height:1.65;color:var(--ink-soft);
+    max-height:200px;overflow-y:auto;
+    white-space:pre-wrap;word-break:break-word;
+  }
+  .reasoning-box::-webkit-scrollbar{width:4px;}
+  .reasoning-box::-webkit-scrollbar-thumb{background:rgba(63,107,58,0.25);border-radius:4px;}
+  .reasoning-box.open{display:block;animation:fadeIn .2s ease;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
+
+  /* reasoning ใน chat bubble */
+  .chat-reasoning-section{margin-top:6px;}
+  .chat-reasoning-toggle{
+    display:inline-flex;align-items:center;gap:5px;
+    background:none;border:1px solid rgba(63,107,58,0.30);
+    color:var(--leaf-deep);font-family:'Kanit',sans-serif;font-size:11px;
+    padding:3px 10px;border-radius:16px;cursor:pointer;
+    transition:background .15s ease;
+  }
+  .chat-reasoning-toggle:hover{background:rgba(63,107,58,0.10);}
+  .chat-reasoning-toggle .arrow{transition:transform .25s ease;display:inline-block;}
+  .chat-reasoning-toggle.open .arrow{transform:rotate(180deg);}
+  .chat-reasoning-box{
+    display:none;margin-top:6px;
+    background:rgba(63,107,58,0.06);border:1px solid rgba(63,107,58,0.18);
+    border-radius:8px;padding:8px 12px;
+    font-size:11.5px;line-height:1.6;color:var(--ink-soft);
+    max-height:160px;overflow-y:auto;
+    white-space:pre-wrap;word-break:break-word;
+  }
+  .chat-reasoning-box.open{display:block;animation:fadeIn .2s ease;}
 </style>
 </head>
 <body>
@@ -306,7 +353,11 @@
 
 <script>
   // ── Config ──
-  const API_BASE = 'https://palm-ai-spva.onrender.com';
+  // Auto-detect: ถ้าเปิดจาก localhost ใช้ port 8000, ถ้า deploy บน server ใช้ URL เดียวกัน
+  const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'
+    : window.location.origin;  // ← เมื่อ deploy จริง HTML และ API ต้องอยู่ domain เดียวกัน
+                                // หรือแก้เป็น URL จริง เช่น 'https://api.yourdomain.com'
 
   // ── Chat history (multi-turn) ──
   let chatHistory = [];
@@ -441,6 +492,7 @@
 
       // ดึงราคาและวันเก็บจาก full_analysis
       const fullText   = data.full_analysis || '';
+      const reasoning  = data.reasoning || '';   // reasoning จาก AI (อาจเป็น "")
       const priceMatch = fullText.match(/(\d+[\d.,]*\s*[-–]\s*\d+[\d.,]*\s*บาท)/);
       const priceText  = priceMatch ? priceMatch[0] : 'ดูในรายละเอียด';
       const daysMatch  = fullText.match(/(อีก\s*\d+[-–]?\d*\s*วัน|เก็บได้เลย|ตัดได้วันนี้|พรุ่งนี้)/i);
@@ -448,6 +500,15 @@
 
       const ripenessLabel = data.ripeness || 'ไม่ทราบ';
       const ripenessColor = data.ripeness_color || '#7F8C8D';
+
+      // สร้าง reasoning section HTML (แสดงเฉพาะถ้ามี reasoning)
+      const reasoningHtml = reasoning ? `
+        <div class="reasoning-section">
+          <button class="reasoning-toggle" aria-expanded="false" aria-label="ดูการวิเคราะห์ของ AI">
+            <span class="arrow">▼</span> ดูการวิเคราะห์ของ AI
+          </button>
+          <div class="reasoning-box">${formatAnalysis(reasoning)}</div>
+        </div>` : '';
 
       // สร้างการ์ดบันทึก
       const card = document.createElement('div');
@@ -466,6 +527,7 @@
             <button class="delete-x" aria-label="ลบรายการ">✕</button>
           </div>
           <p class="entry-note">${formatAnalysis(fullText)}</p>
+          ${reasoningHtml}
           <div class="entry-stats">
             <span class="stat-chip price">💰 ${priceText}</span>
             <span class="stat-chip timing">⏱ ${daysText}</span>
@@ -473,6 +535,20 @@
         </div>`;
 
       entries.prepend(card);
+
+      // ผูก event ปุ่ม reasoning toggle
+      const toggleBtn = card.querySelector('.reasoning-toggle');
+      if (toggleBtn) {
+        const box = card.querySelector('.reasoning-box');
+        toggleBtn.addEventListener('click', () => {
+          const isOpen = box.classList.toggle('open');
+          toggleBtn.classList.toggle('open', isOpen);
+          toggleBtn.querySelector('.arrow').textContent = isOpen ? '▲' : '▼';
+          toggleBtn.setAttribute('aria-expanded', isOpen);
+          toggleBtn.childNodes[1].textContent = isOpen ? ' ซ่อนการวิเคราะห์' : ' ดูการวิเคราะห์ของ AI';
+        });
+      }
+
       card.querySelector('.delete-x').addEventListener('click', () => { card.remove(); updateCount(); });
 
       updateCount();
@@ -531,7 +607,10 @@ ${fullText}`;
   const chatBox   = document.getElementById('chatBox');
   const sendBtn   = document.getElementById('sendBtn');
 
-  function appendMsg(text, sender) {
+  function appendMsg(text, sender, reasoning) {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:flex;flex-direction:column;align-items:' + (sender === 'ai' ? 'flex-start' : 'flex-end') + ';';
+
     const el = document.createElement('div');
     el.className = 'msg ' + sender;
     if (sender === 'ai') {
@@ -539,7 +618,30 @@ ${fullText}`;
     } else {
       el.textContent = text;
     }
-    chatBox.appendChild(el);
+    wrapper.appendChild(el);
+
+    // เพิ่ม reasoning toggle ใต้ AI message (ถ้ามี)
+    if (sender === 'ai' && reasoning) {
+      const section = document.createElement('div');
+      section.className = 'chat-reasoning-section';
+      section.innerHTML = `
+        <button class="chat-reasoning-toggle" aria-expanded="false" aria-label="ดูการวิเคราะห์ของ AI">
+          <span class="arrow">▼</span><span class="label-text"> ดูการวิเคราะห์ของ AI</span>
+        </button>
+        <div class="chat-reasoning-box">${formatAnalysis(reasoning)}</div>`;
+      const btn = section.querySelector('.chat-reasoning-toggle');
+      const box = section.querySelector('.chat-reasoning-box');
+      btn.addEventListener('click', () => {
+        const isOpen = box.classList.toggle('open');
+        btn.classList.toggle('open', isOpen);
+        btn.querySelector('.arrow').textContent = isOpen ? '▲' : '▼';
+        btn.querySelector('.label-text').textContent = isOpen ? ' ซ่อนการวิเคราะห์' : ' ดูการวิเคราะห์ของ AI';
+        btn.setAttribute('aria-expanded', isOpen);
+      });
+      wrapper.appendChild(section);
+    }
+
+    chatBox.appendChild(wrapper);
     chatBox.scrollTop = chatBox.scrollHeight;
     return el;
   }
@@ -582,7 +684,7 @@ ${fullText}`;
 
       const data = await res.json();
       typingEl.remove();
-      appendMsg(data.response, 'ai');
+      appendMsg(data.response, 'ai', data.reasoning || '');
       chatHistory.push({role: 'assistant', content: data.response});
 
     } catch (err) {
