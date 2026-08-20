@@ -92,10 +92,8 @@ def extract_thinking(text: str) -> tuple:
     """
     แยก Thinking/Reasoning ของ Qwen3 ออกจาก final answer
     - ดึง <think>...</think> block ออกมาเก็บเป็น reasoning แยก
-    - ลบ block คิดอื่น ๆ ที่แสดงออกมาโดยไม่มี tag
+    - ลบ/ย้าย English analysis block ที่รั่วออกมานอก tag
     - Return: (answer, reasoning) tuple
-      - answer: ข้อความที่จะแสดงให้ user เห็นปกติ
-      - reasoning: กระบวนการคิดของ AI (อาจเป็น "" ถ้าไม่มี)
     """
     if not text:
         return text, ""
@@ -108,14 +106,25 @@ def extract_thinking(text: str) -> tuple:
         reasoning = think_match.group(1).strip()
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
 
-    # 2. ลบ "Here's a thinking process:" และ block ที่ตามมา (ไม่เก็บไว้ใน reasoning)
+    # 2. ลบ/ย้าย English analysis blocks ที่รั่วออกมานอก <think> tag
     think_markers = [
         r"Here'?s a thinking process.*?(?=\n\n[^\n]|\n(?:\d+\.|\*|-|\u0e08\u0e32\u0e01|\u0e2a\u0e27\u0e31\u0e2a|\u0e1c\u0e21|\u0e19\u0e49\u0e2d\u0e07))",
         r"Thinking process:.*?(?=\n\n[^\n])",
-        r"Let me analyze.*?(?=\n\n[^\n])",
+        r"Let me (?:analyze|think|break|go through|process).*?(?=\n\n[^\n])",
+        r"\d+\.\s*Analyze\s+User\s+Input:.*?(?=\n[\u0e00-\u0e7f]|\Z)",
+        r"Step\s+\d+:.*?(?=\n\n[^\n]|\Z)",
     ]
     for pattern in think_markers:
         text = re.sub(pattern, '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 3. ถ้ายังมี English preamble ใหญ่ก่อนภาษาไทย → ย้ายไปเป็น reasoning
+    thai_match = re.search(r'[\u0e00-\u0e7f]', text)
+    if thai_match and thai_match.start() > 150:
+        english_preamble = text[:thai_match.start()].strip()
+        if english_preamble and re.search(r'[A-Za-z]{4,}', english_preamble):
+            if not reasoning:
+                reasoning = english_preamble
+            text = text[thai_match.start():]
 
     return text.strip(), reasoning
 
