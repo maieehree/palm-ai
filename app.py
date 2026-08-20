@@ -88,19 +88,27 @@ def parse_ripeness(text: str) -> str:
 
 import re
 
-def strip_thinking(text: str) -> str:
+def extract_thinking(text: str) -> tuple:
     """
-    กรอง Thinking Mode ของ Qwen3 ออกจากคำตอบก่อนส่งกลับ user
-    - ลบส่วน <think>...</think>
-    - ลบส่วน "Here's a thinking process:..." และ block คีดที่แสดงออกมา
+    แยก Thinking/Reasoning ของ Qwen3 ออกจาก final answer
+    - ดึง <think>...</think> block ออกมาเก็บเป็น reasoning แยก
+    - ลบ block คิดอื่น ๆ ที่แสดงออกมาโดยไม่มี tag
+    - Return: (answer, reasoning) tuple
+      - answer: ข้อความที่จะแสดงให้ user เห็นปกติ
+      - reasoning: กระบวนการคิดของ AI (อาจเป็น "" ถ้าไม่มี)
     """
     if not text:
-        return text
+        return text, ""
 
-    # 1. ลบ <think>...</think> block
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    reasoning = ""
 
-    # 2. ลบ "Here's a thinking process:" และ block ที่ตามมาจนถึงบรรทัดที่ AI เริ่มตอบเป็นภาษาไทย
+    # 1. ดึง <think>...</think> block ออกมาเก็บไว้เป็น reasoning
+    think_match = re.search(r'<think>(.*?)</think>', text, flags=re.DOTALL)
+    if think_match:
+        reasoning = think_match.group(1).strip()
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+
+    # 2. ลบ "Here's a thinking process:" และ block ที่ตามมา (ไม่เก็บไว้ใน reasoning)
     think_markers = [
         r"Here'?s a thinking process.*?(?=\n\n[^\n]|\n(?:\d+\.|\*|-|\u0e08\u0e32\u0e01|\u0e2a\u0e27\u0e31\u0e2a|\u0e1c\u0e21|\u0e19\u0e49\u0e2d\u0e07))",
         r"Thinking process:.*?(?=\n\n[^\n])",
@@ -109,7 +117,7 @@ def strip_thinking(text: str) -> str:
     for pattern in think_markers:
         text = re.sub(pattern, '', text, flags=re.DOTALL | re.IGNORECASE)
 
-    return text.strip()
+    return text.strip(), reasoning
 
 
 RIPENESS_COLOR = {
@@ -200,7 +208,7 @@ async def analyze_palm_image(
             max_tokens=VISION_MAX_TOKENS,
         )
 
-        analysis_text = strip_thinking(response.choices[0].message.content)
+        analysis_text, reasoning = extract_thinking(response.choices[0].message.content)
         ripeness = parse_ripeness(analysis_text)
 
         return {
@@ -208,6 +216,7 @@ async def analyze_palm_image(
             "ripeness": ripeness,
             "ripeness_color": RIPENESS_COLOR.get(ripeness, "#7F8C8D"),
             "full_analysis": analysis_text,
+            "reasoning": reasoning,   # กระบวนการคิดของ AI ("" ถ้าไม่มี)
             "tree_label": tree_label,
             "zone": zone,
             "model_used": model,
@@ -257,9 +266,12 @@ async def chat_with_palm_ai(request: ChatRequest):
             max_tokens=CHAT_MAX_TOKENS,
         )
 
+        answer, reasoning = extract_thinking(response.choices[0].message.content)
+
         return {
             "success": True,
-            "response": strip_thinking(response.choices[0].message.content),
+            "response": answer,
+            "reasoning": reasoning,   # กระบวนการคิดของ AI ("" ถ้าไม่มี)
             "model_used": request.model,
             "usage": {
                 "prompt_tokens": response.usage.prompt_tokens,
