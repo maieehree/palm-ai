@@ -1,5 +1,7 @@
 import os
 import base64
+import time
+import random
 from typing import List, Optional
 from pathlib import Path
 
@@ -22,9 +24,9 @@ load_dotenv(override=True)
 # App setup
 # ─────────────────────────────────────────────
 app = FastAPI(
-    title="AI ดูแลปาล์ม",
+    title="usekedo",
     description="API วิเคราะห์ภาพทะลายปาล์มน้ำมัน และตอบคำถามผู้เชี่ยวชาญ",
-    version="2.0.0",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -38,13 +40,18 @@ app.add_middleware(
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
-DEFAULT_MODEL = "qwen/qwen3.6-27b"   # รองรับ Vision + Thai ดีมาก (ฟรีบน Groq)
-VISION_MAX_TOKENS = 800   # ลดจาก 1500 — วิเคราะห์ภาพไม่ต้องยาว
-CHAT_MAX_TOKENS = 600     # ปรับให้พอดี — ไม่ตัดกลางคัน แต่ยังกระชับ
+DEFAULT_MODEL   = "qwen/qwen3.6-27b"   # รองรับ Vision + Thai ดีมาก (ฟรีบน Groq)
+VISION_MAX_TOKENS = 800
+CHAT_MAX_TOKENS   = 600
+
+# ── Retry config for Groq 429 ──
+MAX_RETRIES = 4          # จำนวนครั้งที่ retry สูงสุด
+BASE_WAIT   = 1.5        # วินาทีเริ่มต้น (exponential backoff)
+MAX_WAIT    = 20.0       # รอสูงสุดไม่เกิน 20 วิ
 
 SYSTEM_PROMPT = f"""ตอบเป็นภาษาไทยเท่านั้น ห้ามใช้ภาษาอังกฤษ
 
-คุณคือ "น้องปาล์ม" AI ผู้เชี่ยวชาญปาล์มน้ำมัน สังกัดศูนย์วิจัยปาล์มน้ำมันสุราษฎร์ธานี กรมวิชาการเกษตร
+คุณคือ "usekedo" AI ผู้เชี่ยวชาญปาล์มน้ำมัน สังกัดศูนย์วิจัยปาล์มน้ำมันสุราษฎร์ธานี กรมวิชาการเกษตร
 
 ฐานความรู้:
 {PALM_KNOWLEDGE}
@@ -58,12 +65,57 @@ SYSTEM_PROMPT = f"""ตอบเป็นภาษาไทยเท่านั
 6. ห้ามเกริ่นนำหรือสรุปซ้ำ ตอบตรงๆ เลย
 """
 
+# ─────────────────────────────────────────────
+# Intent Guard — หัวข้อที่ usekedo ตอบได้
+# ─────────────────────────────────────────────
+PALM_KEYWORDS = {
+    # ปาล์มและเกษตร
+    "ปาล์ม", "ทะลาย", "ผลปาล์ม", "น้ำมันปาล์ม", "สวนปาล์ม", "ต้นปาล์ม",
+    "ตัด", "เก็บเกี่ยว", "สุก", "ราคา", "แปลง", "โซน", "ปุ๋ย", "โรค",
+    "แมลง", "ศัตรูพืช", "รด", "น้ำ", "ดิน", "ปลูก", "เกษตร", "สวน",
+    "ผล", "กก", "บาท", "มกษ", "doa", "กรม", "วิชาการ",
+    # คำทั่วไปในบริบทสวนปาล์ม
+    "วิเคราะห์", "ภาพ", "รูป", "สี", "ความสุก", "คำแนะนำ", "เปอร์เซ็นต์",
+    "น้ำมัน", "ทะลาย", "ช่วง", "ฤดู", "อากาศ", "ฝน", "แล้ง",
+    "ต้น", "ใบ", "ราก", "ลำต้น", "ทะลาย", "ผลิ",
+}
+
+OFF_TOPIC_REPLY = (
+    "ขออภัยครับ usekedo ตอบได้เฉพาะเรื่องปาล์มน้ำมัน การเก็บเกี่ยว "
+    "ราคา และการดูแลสวนเท่านั้นครับ หากมีคำถามเรื่องสวนปาล์ม "
+    "ยินดีช่วยเสมอครับ 🌴"
+)
+
+def is_palm_related(text: str) -> bool:
+    """
+    Intent guard: คืน True ถ้าข้อความเกี่ยวกับปาล์ม/เกษตร
+    ใช้ keyword matching แบบง่าย + fallback ให้ผ่านถ้าไม่แน่ใจ
+    (ดีกว่า false negative ที่ block คำถามดีๆ)
+    """
+    lower = text.lower()
+    for kw in PALM_KEYWORDS:
+        if kw in lower:
+            return True
+
+    # ถ้าสั้นมาก (≤ 10 ตัวอักษร) → ให้ผ่านเพื่อ UX
+    if len(text.strip()) <= 10:
+        return True
+
+    # keyword ภาษาอังกฤษที่เกี่ยวข้อง
+    en_keywords = {"palm", "oil", "harvest", "ripeness", "fruit", "crop",
+                   "farm", "plantation", "fertilizer", "price", "ton"}
+    for kw in en_keywords:
+        if kw in lower:
+            return True
+
+    return False
+
 
 # ─────────────────────────────────────────────
-# Helper
+# Helper: Groq client + Retry with backoff
 # ─────────────────────────────────────────────
 def get_groq_client() -> Groq:
-    load_dotenv(override=True)   # โหลด key ใหม่ทุกครั้ง → เปลี่ยน .env ไม่ต้อง restart
+    load_dotenv(override=True)
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         raise HTTPException(
@@ -73,6 +125,47 @@ def get_groq_client() -> Groq:
     return Groq(api_key=api_key)
 
 
+def groq_call_with_retry(client: Groq, **kwargs):
+    """
+    เรียก client.chat.completions.create() พร้อม exponential backoff
+    รองรับ Groq HTTP 429 (rate limit) และ 503 (overload)
+    """
+    last_exc = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            err_str = str(exc).lower()
+            # ตรวจ rate limit / overload / server error
+            is_retryable = (
+                "429" in err_str
+                or "rate_limit" in err_str
+                or "rate limit" in err_str
+                or "503" in err_str
+                or "overload" in err_str
+                or "server error" in err_str
+            )
+            if not is_retryable:
+                raise   # ถ้าไม่ใช่ rate limit → raise ทันที
+
+            last_exc = exc
+            wait = min(BASE_WAIT * (2 ** attempt) + random.uniform(0, 0.5), MAX_WAIT)
+            print(f"[Groq] 429/503 attempt {attempt+1}/{MAX_RETRIES} — wait {wait:.1f}s | {exc}")
+            time.sleep(wait)
+
+    # หมด retry แล้วยังไม่ได้
+    raise HTTPException(
+        status_code=429,
+        detail=(
+            f"Groq API ยุ่งมาก (rate limit) กรุณารอสักครู่แล้วลองใหม่ครับ "
+            f"(retry {MAX_RETRIES} ครั้งแล้ว — {last_exc})"
+        ),
+    )
+
+
+# ─────────────────────────────────────────────
+# Other helpers
+# ─────────────────────────────────────────────
 def parse_ripeness(text: str) -> str:
     """ดึงระดับความสุกจาก response ของ AI"""
     if "สุกเกิน" in text:
@@ -157,8 +250,6 @@ def extract_thinking(text: str) -> tuple:
     return answer, reasoning
 
 
-
-
 RIPENESS_COLOR = {
     "สุกพอดี":  "#C0392B",
     "ใกล้สุก":  "#E8862E",
@@ -188,7 +279,7 @@ class ChatRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     """ตรวจสอบสถานะ server"""
-    return {"status": "ok", "service": "AI ดูแลปาล์ม", "version": "2.0.0"}
+    return {"status": "ok", "service": "usekedo", "version": "2.1.0"}
 
 
 @app.post("/api/analyze")
@@ -226,7 +317,8 @@ async def analyze_palm_image(
 ห้ามเกริ่นนำ ตอบตรงๆ เลย"""
 
     try:
-        response = client.chat.completions.create(
+        response = groq_call_with_retry(
+            client,
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -270,17 +362,32 @@ async def analyze_palm_image(
 @app.post("/api/chat")
 async def chat_with_palm_ai(request: ChatRequest):
     """
-    คุยกับ AI ผู้เชี่ยวชาญปาล์มน้ำมัน (รองรับ multi-turn)
+    คุยกับ usekedo ผู้เชี่ยวชาญปาล์มน้ำมัน (รองรับ multi-turn)
 
     - ส่ง messages array ทั้งหมด (history)
     - AI จะตอบโดยอิงฐานความรู้ DOA
+    - มี intent guard กรองคำถามนอกเรื่อง
     """
     if not request.messages:
         raise HTTPException(status_code=400, detail="กรุณาส่งข้อความอย่างน้อย 1 ข้อความ")
 
+    # ── Intent Guard: กรองคำถามนอกเรื่องปาล์ม ──
+    last_user_msg = next(
+        (m.content for m in reversed(request.messages) if m.role == "user"), ""
+    )
+    if last_user_msg and not is_palm_related(last_user_msg):
+        return {
+            "success": True,
+            "response": OFF_TOPIC_REPLY,
+            "reasoning": "",
+            "model_used": request.model,
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "intent_blocked": True,   # flag ให้ frontend รู้ว่าถูก guard block
+        }
+
     client = get_groq_client()
 
-    # สร้าง system prompt ที่รวมบริบทของเฮังเดอร์ (ถ้ามี)
+    # สร้าง system prompt ที่รวมบริบทการวิเคราะห์ (ถ้ามี)
     system_content = SYSTEM_PROMPT
     if request.analysis_context:
         system_content += f"""
@@ -298,7 +405,8 @@ async def chat_with_palm_ai(request: ChatRequest):
         messages.append({"role": msg.role, "content": msg.content})
 
     try:
-        response = client.chat.completions.create(
+        response = groq_call_with_retry(
+            client,
             model=request.model,
             messages=messages,
             temperature=0.4,
