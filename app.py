@@ -79,7 +79,7 @@ app.add_middleware(
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
-DEFAULT_MODEL   = "llama-3.1-8b-instant"  # เร็วมาก 1-3 วิ บน Groq
+DEFAULT_MODEL   = "openai/gpt-oss-20b"  # เร็วมาก 1-3 วิ บน Groq
 VISION_MAX_TOKENS = 400  # ให้วิเคราะห์ภาพได้ละเอียดพอ
 CHAT_MAX_TOKENS   = 300  # ตอบภาษาไทยได้เต็มที่
 
