@@ -3,3 +3,20 @@ uvicorn>=0.20.0
 python-multipart>=0.0.6
 python-dotenv>=1.0.1
 groq>=0.9.0
+# Pillow: ใช้สำหรับ Tiny Vision pipeline (Phase 1 — rule-based)
+# ติดตั้งอยู่แล้วใน .venv
+Pillow>=10.0.0
+
+# ─────────────────────────────────────────────────────────
+# Phase 2: MobileNetV3-Small ONNX (ยังไม่ install — รอ dataset)
+# ─────────────────────────────────────────────────────────
+# ONNX runtime for Phase 2 classifier (optional, enable when you have model)
+onnxruntime>=1.17.0
+onnx>=1.15.0
+# Redis optional for persistent caching (install if you plan to use Redis)
+redis>=4.5.0
+# ─────────────────────────────────────────────────────────
+# Phase 2: Training dependencies (รันบน dev machine เท่านั้น)
+# ─────────────────────────────────────────────────────────
+# torch>=2.0.0
+# torchvision>=0.15.0
