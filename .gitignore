@@ -41,3 +41,19 @@ logs/
 
 # OS
 desktop.ini
+
+# ML Model files — host separately, never commit
+backend/vision/model/*.onnx
+backend/vision/model/*.tflite
+backend/vision/model/*.pt
+backend/vision/model/*.pth
+backend/vision/model/*.h5
+backend/vision/model/*.bin
+
+# Benchmark output
+benchmark_results.json
+benchmark_results_*.json
+
+# Dataset (ถ้า download มาไว้ใน project)
+dataset/
+data/
