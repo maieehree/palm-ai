@@ -1163,7 +1163,7 @@
         </svg>
         วิเคราะห์ด้วย usekedo
       </button>
-      <p class="analyzing-note" id="analyzingNote">🌴 กำลังวิเคราะห์… รอแป๊บเดียว</p>
+      <p class="analyzing-note" id="analyzingNote">🌴 กำลังอ่านสีทะลาย…</p>
     </div>
 
     <div class="notebook">
@@ -1349,7 +1349,7 @@
       const fileName = fileBlob.type.includes('png') ? 'palm.png' : 'palm.jpg';
 
       analyzeBtn.disabled = true;
-      analyzingNote.textContent = '🌴 กำลังวิเคราะห์… รอแป๊บเดียว';
+      analyzingNote.textContent = '🌴 กำลังให้ AI วิเคราะห์ภาพ…';
       analyzingNote.classList.add('show');
 
       try {
