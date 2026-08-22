@@ -1163,7 +1163,7 @@
         </svg>
         วิเคราะห์ด้วย usekedo
       </button>
-      <p class="analyzing-note" id="analyzingNote">🌴 กำลังอ่านสีทะลาย…</p>
+      <p class="analyzing-note" id="analyzingNote">🌴 กำลังวิเคราะห์… รอแป๊บเดียว</p>
     </div>
 
     <div class="notebook">
@@ -1349,7 +1349,7 @@
       const fileName = fileBlob.type.includes('png') ? 'palm.png' : 'palm.jpg';
 
       analyzeBtn.disabled = true;
-      analyzingNote.textContent = '🌴 กำลังให้ AI วิเคราะห์ภาพ…';
+      analyzingNote.textContent = '🌴 กำลังวิเคราะห์… รอแป๊บเดียว';
       analyzingNote.classList.add('show');
 
       try {
@@ -1365,10 +1365,31 @@
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({ detail: 'เชื่อมต่อ API ไม่ได้ — ตรวจสอบว่า server รันอยู่ที่ port 8000' }));
-          throw new Error(err.detail || 'เกิดข้อผิดพลาด');
+          const msg = err.detail || '';
+          // Friendly handling for rate-limit responses
+          if ((msg && msg.toLowerCase().includes('rate limit')) || err.rate_limited) {
+            showToast('⚠️ บริการ  ถูกจำกัดการใช้งาน (rate limit) — ระบบจะใช้ผลจากตัวกรองภาพ (classifier) แทนชั่วคราว');
+            console.warn('[Analyze] rate-limited, backend message:', msg || err);
+            return;
+          }
+          throw new Error(msg || 'เกิดข้อผิดพลาด');
         }
 
         const data = await res.json();
+
+        // ── Tiny Vision: กรณีภาพไม่ใช่ปาล์ม ──────────────────────────────
+        // Backend ส่ง success=false + is_palm=false เมื่อ classifier reject
+        // ห้าม throw error (เพราะ HTTP 200 OK) — แสดงข้อความให้ user แทน
+        if (data.is_palm === false) {
+          showToast('⚠️ ' + (data.full_analysis || 'ภาพนี้ไม่ใช่ภาพปาล์มน้ำมัน กรุณาอัปโหลดภาพปาล์ม'));
+          return; // หยุด — ไม่สร้างการ์ด
+        }
+
+        // ── Tiny Vision: กรณี confidence ต่ำ ─────────────────────────────
+        if (data.success === false && data.low_confidence === true) {
+          showToast('🔍 ' + (data.full_analysis || 'ไม่สามารถระบุระดับความสุกได้อย่างมั่นใจ กรุณาอัปโหลดภาพที่เห็นทะลายชัดขึ้น'));
+          return; // หยุด — ไม่สร้างการ์ด
+        }
 
         // ดึงราคาและวันเก็บจาก full_analysis
         const fullText = data.full_analysis || '';
@@ -1377,6 +1398,11 @@
         const priceText = priceMatch ? priceMatch[0] : 'ดูในรายละเอียด';
         const daysMatch = fullText.match(/(อีก\s*\d+[-–]?\d*\s*วัน|เก็บได้เลย|ตัดได้วันนี้|พรุ่งนี้)/i);
         const daysText = daysMatch ? daysMatch[0] : 'ดูคำแนะนำด้านล่าง';
+
+        // ── Pipeline badge (แสดงเฉพาะ Tiny Vision เพื่อไม่เปลี่ยน UI เดิม) ──
+        const pipelineBadge = (data.pipeline === 'new_tiny_vision')
+          ? `<span class="stat-chip" title="Confidence: ${((data.classifier_confidence || 0) * 100).toFixed(0)}%">🔍 Tiny Vision (${(data.classifier_confidence || 0).toFixed(2)})</span>`
+          : '';
 
         const ripenessLabel = data.ripeness || 'ไม่ทราบ';
         const ripenessColor = data.ripeness_color || '#7F8C8D';
@@ -1411,6 +1437,7 @@
           <div class="entry-stats">
             <span class="stat-chip price">💰 ${priceText}</span>
             <span class="stat-chip timing">⏱ ${daysText}</span>
+            ${pipelineBadge}
           </div>
         </div>`;
 
@@ -1447,7 +1474,9 @@ ${fullText}`;
         else showToast(`✅ AI วิเคราะห์เสร็จ: ${ripenessLabel}`);
 
       } catch (err) {
-        showToast(`❌ ${err.message}`);
+        // Prefer friendly messages for known cases
+        const lowMsg = (err && err.message) ? err.message : 'เกิดข้อผิดพลาดในการเชื่อมต่อ';
+        showToast(`❌ ${lowMsg}`);
         console.error('[Analyze error]', err);
       } finally {
         analyzeBtn.disabled = false;
@@ -1564,8 +1593,14 @@ ${fullText}`;
 
         const data = await res.json();
         typingEl.remove();
-        appendMsg(data.response, 'ai', data.reasoning || '');
-        chatHistory.push({ role: 'assistant', content: data.response });
+        // If backend indicates rate-limiting, show friendly message instead of raw error
+        if (data && data.rate_limited) {
+          appendMsg('ขณะนี้บริการ LLM ถูกจำกัด (rate limit) — กรุณาลองอีกครั้งภายหลัง หรือใช้การวิเคราะห์จากภาพแทน', 'ai', '');
+          chatHistory.push({ role: 'assistant', content: 'LLM rate-limited fallback message' });
+        } else {
+          appendMsg(data.response, 'ai', data.reasoning || '');
+          chatHistory.push({ role: 'assistant', content: data.response });
+        }
 
       } catch (err) {
         typingEl.remove();
